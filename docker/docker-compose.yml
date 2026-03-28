@@ -5,10 +5,15 @@ services:
       dockerfile: docker/Dockerfile
     env_file: .env.docker
     ports:
-      - "3001:3000"   # Port 3001 sur l'hôte pour ne pas conflictuer avec la prod (3000)
+      - "3001:3000"   # Port 3001 sur l'hôte (ne conflicte pas avec la prod sur 3000)
+    volumes:
+      - sspr-data:/app/prisma   # Persister la base SQLite entre redémarrages
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000"]
       interval: 15s
       timeout: 5s
       retries: 8
-      start_period: 30s
+      start_period: 90s   # Laisser le temps au build + migrate au premier démarrage
+
+volumes:
+  sspr-data:
