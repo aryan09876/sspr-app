@@ -120,16 +120,28 @@ if ! command -v npm &>/dev/null; then
 fi
 
 # =============================================================================
-# ÉTAPE 2 — PM2
+# ÉTAPE 2 — PM2 (optionnel)
 # =============================================================================
-section "PM2 (gestionnaire de process)"
+section "Gestionnaire de process"
 
-if command -v pm2 &>/dev/null; then
-  ok "PM2 déjà installé : $(pm2 --version)"
+USE_PM2="false"
+echo ""
+echo -e "  PM2 est un gestionnaire de process qui redémarre automatiquement"
+echo -e "  l'application en cas de crash et au démarrage du serveur."
+echo -e "  ${YELLOW}Recommandé en production.${RESET} Alternatives : systemd, Docker."
+echo ""
+read -r -p "  Installer et utiliser PM2 ? [O/n] " PM2_CONFIRM
+if [[ ! "$PM2_CONFIRM" =~ ^[nN]$ ]]; then
+  USE_PM2="true"
+  if command -v pm2 &>/dev/null; then
+    ok "PM2 déjà installé : $(pm2 --version)"
+  else
+    info "Installation de PM2..."
+    sudo npm i -g pm2 >/dev/null 2>&1
+    ok "PM2 $(pm2 --version) installé"
+  fi
 else
-  info "Installation de PM2..."
-  sudo npm i -g pm2 >/dev/null 2>&1
-  ok "PM2 $(pm2 --version) installé"
+  ok "PM2 non utilisé — l'application sera lancée avec npm start"
 fi
 
 # =============================================================================
@@ -152,9 +164,7 @@ fi
 section "Génération des secrets cryptographiques"
 
 OTP_SECRET_GEN=$(openssl rand -base64 32)
-NEXTAUTH_SECRET_GEN=$(openssl rand -base64 32)
 ok "OTP_SECRET généré (HMAC-SHA256, 256 bits)"
-ok "NEXTAUTH_SECRET généré (256 bits)"
 
 # =============================================================================
 # ÉTAPE 5 — Écriture du fichier .env.local
@@ -202,8 +212,6 @@ SMTP_FROM=${SMTP_USER}
 OTP_SECRET=${OTP_SECRET_GEN}
 
 APP_BASE_URL=${APP_BASE_URL}
-NEXTAUTH_URL=${APP_BASE_URL}
-NEXTAUTH_SECRET=${NEXTAUTH_SECRET_GEN}
 
 APP_NAME=${APP_NAME}
 EOF
@@ -239,39 +247,46 @@ npm run build 2>&1 | grep -E "(✓|✗|error|Error|warning|Route)" || true
 ok "Build terminé"
 
 # =============================================================================
-# ÉTAPE 9 — PM2 : démarrage de l'application
+# ÉTAPE 9 — Démarrage de l'application
 # =============================================================================
-section "Démarrage avec PM2"
+if [ "$USE_PM2" = "true" ]; then
+  section "Démarrage avec PM2"
 
-if pm2 describe sspr-app &>/dev/null; then
-  info "Redémarrage de l'instance PM2 existante..."
-  pm2 restart sspr-app --update-env
-  ok "Application redémarrée"
+  if pm2 describe sspr-app &>/dev/null; then
+    info "Redémarrage de l'instance PM2 existante..."
+    pm2 restart sspr-app --update-env
+    ok "Application redémarrée"
+  else
+    info "Création de l'instance PM2..."
+    pm2 start npm --name "sspr-app" -- start
+    ok "Application démarrée"
+  fi
+
+  pm2 save >/dev/null
+  ok "Liste PM2 sauvegardée"
+
+  # Démarrage automatique au boot
+  info "Configuration du démarrage automatique..."
+  STARTUP_CMD=$(pm2 startup 2>&1 | grep "sudo env" || true)
+  if [ -n "$STARTUP_CMD" ]; then
+    eval "$STARTUP_CMD" >/dev/null 2>&1 && ok "Démarrage automatique configuré" \
+      || warn "Échec sudo — exécutez manuellement : $STARTUP_CMD"
+  else
+    ok "Démarrage automatique déjà configuré"
+  fi
 else
-  info "Création de l'instance PM2..."
-  pm2 start npm --name "sspr-app" -- start
-  ok "Application démarrée"
+  section "Démarrage de l'application"
+  info "Lancement avec npm start (en arrière-plan)..."
+  cd "$PROJECT_DIR"
+  nohup npm start > "$PROJECT_DIR/sspr.log" 2>&1 &
+  APP_PID=$!
+  ok "Application démarrée (PID: $APP_PID)"
+  warn "L'application ne redémarrera pas automatiquement en cas de crash ou reboot."
+  info "Pour un démarrage automatique, envisagez PM2 ou créez un service systemd."
 fi
 
-pm2 save >/dev/null
-ok "Liste PM2 sauvegardée"
-
 # =============================================================================
-# ÉTAPE 10 — PM2 startup (démarrage automatique au boot)
-# =============================================================================
-section "Démarrage automatique au boot"
-
-info "Configuration du démarrage automatique..."
-STARTUP_CMD=$(pm2 startup 2>&1 | grep "sudo env" || true)
-if [ -n "$STARTUP_CMD" ]; then
-  eval "$STARTUP_CMD" >/dev/null 2>&1 && ok "Démarrage automatique configuré" \
-    || warn "Échec sudo — exécutez manuellement : $STARTUP_CMD"
-else
-  ok "Démarrage automatique déjà configuré"
-fi
-
-# =============================================================================
-# ÉTAPE 11 — Nginx (si installé)
+# ÉTAPE 10 — Nginx (si installé)
 # =============================================================================
 if command -v nginx &>/dev/null; then
   section "Nginx (reverse proxy)"
@@ -361,24 +376,30 @@ else
 fi
 
 # =============================================================================
-# ÉTAPE 12 — Vérification finale
+# ÉTAPE 11 — Vérification finale
 # =============================================================================
 section "Vérification finale"
 
 sleep 2  # Laisser le temps à l'app de démarrer
 
-PM2_STATUS=$(pm2 list 2>/dev/null | grep "sspr-app" | awk '{print $18}' || echo "inconnu")
-if pm2 list 2>/dev/null | grep -q "online"; then
-  ok "Application PM2 : online"
-else
-  warn "Statut PM2 incertain — vérifiez avec : pm2 logs sspr-app --lines 20"
+if [ "$USE_PM2" = "true" ]; then
+  if pm2 list 2>/dev/null | grep -q "online"; then
+    ok "Application PM2 : online"
+  else
+    warn "Statut PM2 incertain — vérifiez avec : pm2 logs sspr-app --lines 20"
+  fi
 fi
 
 HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:3000" 2>/dev/null || echo "000")
 if [ "$HTTP_CODE" = "200" ]; then
-  ok "Réponse HTTP locale : 200 ✓"
+  ok "Réponse HTTP locale : 200"
 else
-  warn "Réponse HTTP locale : $HTTP_CODE — consultez : pm2 logs sspr-app --lines 30"
+  warn "Réponse HTTP locale : $HTTP_CODE — l'application peut encore démarrer..."
+  if [ "$USE_PM2" = "true" ]; then
+    info "Consultez : pm2 logs sspr-app --lines 30"
+  else
+    info "Consultez : tail -50 $PROJECT_DIR/sspr.log"
+  fi
 fi
 
 # =============================================================================
@@ -392,12 +413,19 @@ echo ""
 echo -e "  Application     : ${BOLD}$APP_NAME${RESET}"
 echo -e "  Accès           : ${BOLD}${APP_BASE_URL}${RESET}"
 echo -e "  Base de données : ${BOLD}$DB_PATH${RESET}"
-echo -e "  Logs PM2        : ${BOLD}pm2 logs sspr-app${RESET}"
-echo ""
-echo -e "${BOLD}  Commandes utiles :${RESET}"
-echo "    pm2 list                          → statut"
-echo "    pm2 logs sspr-app --lines 50      → logs"
-echo "    pm2 restart sspr-app --update-env → redémarrer"
+
+if [ "$USE_PM2" = "true" ]; then
+  echo ""
+  echo -e "${BOLD}  Commandes utiles (PM2) :${RESET}"
+  echo "    pm2 list                          → statut"
+  echo "    pm2 logs sspr-app --lines 50      → logs"
+  echo "    pm2 restart sspr-app --update-env → redémarrer"
+else
+  echo ""
+  echo -e "${BOLD}  Commandes utiles :${RESET}"
+  echo "    tail -f $PROJECT_DIR/sspr.log     → logs"
+  echo "    npm start                          → redémarrer (depuis $PROJECT_DIR)"
+fi
 echo ""
 
 if [ "${TLS_REJECT}" = "false" ]; then
