@@ -1,0 +1,24 @@
+node_modules
+.next
+
+# Variables d'environnement (contiennent les credentials)
+.env
+.env.local
+.env.*.local
+
+# Fichiers de configuration confidentiels
+CONFIGURATION.md
+setup/config.sh
+
+# Base de données SQLite (données réelles)
+prisma/dev.db
+prisma/*.db
+
+# Fichiers internes Claude Code
+.claude/
+
+# Docker — vars d'environnement de test (même fictives)
+docker/.env.docker
+
+# Prisma client généré
+/lib/generated/prisma
