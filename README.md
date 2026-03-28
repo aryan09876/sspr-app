@@ -181,6 +181,132 @@ Get-ADUser -Filter * -Properties mail | Where-Object { -not $_.mail } | Select N
 
 ---
 
+## Configuration HTTPS et certificats TLS
+
+L'application doit être servie en HTTPS via Nginx. Le certificat est signé par votre autorité de certification Active Directory (AD CS).
+
+### Étape 1 — Créer le dossier SSL et la clé privée
+
+```bash
+sudo mkdir -p /etc/nginx/ssl/mdp
+sudo openssl req -new -newkey rsa:2048 -nodes \
+  -keyout /etc/nginx/ssl/mdp/mdp.DOMAINE.local.key \
+  -out    /etc/nginx/ssl/mdp/mdp.DOMAINE.local.csr \
+  -subj   "/CN=mdp.DOMAINE.local" \
+  -addext "subjectAltName=DNS:mdp.DOMAINE.local,IP:IP_DU_SERVEUR"
+sudo chmod 600 /etc/nginx/ssl/mdp/mdp.DOMAINE.local.key
+```
+
+> Remplacez `DOMAINE.local` par votre domaine et `IP_DU_SERVEUR` par l'IP de la VM.
+
+### Étape 2 — Faire signer le CSR par AD CS
+
+1. Depuis un navigateur dans le domaine, accédez à `http://DC/certsrv`
+2. **Demander un certificat** → **Demande de certificat avancée**
+3. Collez le contenu du `.csr` (ouvrir avec `cat /etc/nginx/ssl/mdp/mdp.DOMAINE.local.csr`)
+4. Modèle de certificat : **Serveur Web**
+5. **Soumettre** → **Télécharger le certificat** (format Base 64) → fichier `.cer`
+
+### Étape 3 — Récupérer le certificat CA
+
+Toujours sur `http://DC/certsrv` :
+1. **Télécharger un certificat d'autorité de certification** → Format Base 64 → fichier `CA-DOMAINE.crt`
+2. Copier les deux fichiers (`.cer` + CA) sur la VM Linux
+
+### Étape 4 — Créer la chaîne complète et installer
+
+```bash
+# Copier les fichiers sur la VM
+sudo cp mdp.DOMAINE.local.cer /etc/nginx/ssl/mdp/mdp.DOMAINE.local.crt
+sudo cp CA-DOMAINE.crt        /etc/nginx/ssl/mdp/CA-DOMAINE.crt
+
+# Créer la fullchain (certificat + CA)
+sudo cat /etc/nginx/ssl/mdp/mdp.DOMAINE.local.crt \
+         /etc/nginx/ssl/mdp/CA-DOMAINE.crt \
+       > /tmp/mdp-fullchain.crt
+sudo mv /tmp/mdp-fullchain.crt /etc/nginx/ssl/mdp/mdp-fullchain.crt
+```
+
+### Étape 5 — Configurer Nginx
+
+Créer `/etc/nginx/sites-available/mdp.DOMAINE.local` :
+
+```nginx
+server {
+    listen 80;
+    server_name mdp.DOMAINE.local;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name mdp.DOMAINE.local;
+
+    ssl_certificate     /etc/nginx/ssl/mdp/mdp-fullchain.crt;
+    ssl_certificate_key /etc/nginx/ssl/mdp/mdp.DOMAINE.local.key;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+    ssl_session_cache   shared:SSL:10m;
+
+    add_header Strict-Transport-Security "max-age=31536000" always;
+
+    location / {
+        proxy_pass         http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header   Host $host;
+        proxy_set_header   X-Real-IP $remote_addr;
+        proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+```bash
+sudo ln -s /etc/nginx/sites-available/mdp.DOMAINE.local /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+### Étape 6 — Configurer le CA pour LDAPS
+
+Le même fichier `CA-DOMAINE.crt` sert à valider le certificat TLS du contrôleur de domaine lors des connexions LDAPS :
+
+```bash
+# Dans .env.local
+AD_TLS_REJECT_UNAUTHORIZED=true
+AD_TLS_CA_CERT_PATH=/etc/nginx/ssl/mdp/CA-DOMAINE.crt
+```
+
+> Si vous ne disposez pas du certificat CA, vous pouvez mettre `AD_TLS_REJECT_UNAUTHORIZED=false` temporairement (non recommandé en production).
+
+### Étape 7 — DNS sur le contrôleur de domaine
+
+Créer un enregistrement A dans la zone DNS de votre domaine (sur le DC) :
+
+| Nom | Type | Valeur |
+|---|---|---|
+| `mdp` | A | `IP_DU_SERVEUR` |
+
+Vérification :
+```bash
+nslookup mdp.DOMAINE.local
+# Doit retourner l'IP du serveur
+```
+
+### Étape 8 — Distribuer le CA aux postes clients
+
+Pour éviter l'avertissement "Connexion non sécurisée" dans les navigateurs :
+
+**Via GPO (recommandé)** :
+```
+Configuration ordinateur → Paramètres Windows → Paramètres de sécurité
+  → Stratégies de clé publique → Autorités de certification racines de confiance
+  → Importer → CA-DOMAINE.crt
+```
+
+**Manuellement** : double-clic sur `CA-DOMAINE.crt` → Installer → "Autorités de certification racines de confiance"
+
+---
+
 ## Sécurité
 
 | Mécanisme | Détail |
