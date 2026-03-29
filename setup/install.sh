@@ -148,7 +148,10 @@ fi
 # ÉTAPE 3 — Nginx (reverse proxy)
 # =============================================================================
 USE_NGINX="false"
-if ! command -v nginx &>/dev/null; then
+if command -v nginx &>/dev/null; then
+  USE_NGINX="true"
+  ok "Nginx déjà installé"
+else
   section "Nginx (reverse proxy)"
   echo ""
   echo -e "  Nginx est un reverse proxy qui permet d'accéder à l'application"
@@ -159,12 +162,14 @@ if ! command -v nginx &>/dev/null; then
   if [[ ! "$NGINX_CONFIRM" =~ ^[nN]$ ]]; then
     info "Installation de Nginx..."
     sudo apt-get install -y nginx >/dev/null 2>&1
-    ok "Nginx installé"
+    # Vérifier que l'installation a réussi
+    if command -v nginx &>/dev/null || [ -x /usr/sbin/nginx ]; then
+      USE_NGINX="true"
+      ok "Nginx installé"
+    else
+      warn "L'installation de Nginx a échoué"
+    fi
   fi
-fi
-
-if command -v nginx &>/dev/null; then
-  USE_NGINX="true"
 fi
 
 # =============================================================================
