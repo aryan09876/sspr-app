@@ -145,7 +145,30 @@ else
 fi
 
 # =============================================================================
-# ÉTAPE 3 — /etc/hosts (résolution DNS du DC)
+# ÉTAPE 3 — Nginx (reverse proxy)
+# =============================================================================
+USE_NGINX="false"
+if ! command -v nginx &>/dev/null; then
+  section "Nginx (reverse proxy)"
+  echo ""
+  echo -e "  Nginx est un reverse proxy qui permet d'accéder à l'application"
+  echo -e "  via le port 80 (HTTP) ou 443 (HTTPS) au lieu du port 3000."
+  echo -e "  ${YELLOW}Recommandé en production.${RESET}"
+  echo ""
+  read -r -p "  Installer Nginx maintenant ? [O/n] " NGINX_CONFIRM
+  if [[ ! "$NGINX_CONFIRM" =~ ^[nN]$ ]]; then
+    info "Installation de Nginx..."
+    sudo apt-get install -y nginx >/dev/null 2>&1
+    ok "Nginx installé"
+  fi
+fi
+
+if command -v nginx &>/dev/null; then
+  USE_NGINX="true"
+fi
+
+# =============================================================================
+# ÉTAPE 4 — /etc/hosts (résolution DNS du DC)
 # =============================================================================
 section "/etc/hosts — Résolution du contrôleur de domaine"
 
@@ -159,7 +182,7 @@ else
 fi
 
 # =============================================================================
-# ÉTAPE 4 — Génération des secrets
+# ÉTAPE 5 — Génération des secrets
 # =============================================================================
 section "Génération des secrets cryptographiques"
 
@@ -167,7 +190,7 @@ OTP_SECRET_GEN=$(openssl rand -base64 32)
 ok "OTP_SECRET généré (HMAC-SHA256, 256 bits)"
 
 # =============================================================================
-# ÉTAPE 5 — Écriture du fichier .env.local
+# ÉTAPE 6 — Écriture du fichier .env.local
 # =============================================================================
 section "Création du fichier .env.local"
 
@@ -186,8 +209,10 @@ else
 fi
 
 # URL de base
-if [ -n "${TLS_CERT_PATH:-}" ] && [ -f "$TLS_CERT_PATH" ] 2>/dev/null; then
+if [ "$USE_NGINX" = "true" ] && [ -n "${TLS_CERT_PATH:-}" ] && [ -f "$TLS_CERT_PATH" ] 2>/dev/null; then
   APP_BASE_URL="https://$APP_HOSTNAME"
+elif [ "$USE_NGINX" = "true" ]; then
+  APP_BASE_URL="http://$APP_HOSTNAME"
 else
   APP_BASE_URL="http://$SERVER_IP:3000"
 fi
@@ -219,7 +244,23 @@ EOF
 ok ".env.local créé dans $PROJECT_DIR"
 
 # =============================================================================
-# ÉTAPE 6 — Installation des dépendances
+# ÉTAPE 7 — Adapter le binding réseau
+# =============================================================================
+# Avec Nginx : Next.js écoute sur 127.0.0.1 (sécurisé, accès via proxy uniquement)
+# Sans Nginx : Next.js écoute sur 0.0.0.0 (accessible directement depuis le réseau)
+if [ "$USE_NGINX" = "true" ]; then
+  # Bind localhost — accès uniquement via Nginx
+  sed -i 's/"start": "next start.*"/"start": "next start -H 127.0.0.1"/' "$PROJECT_DIR/package.json"
+  ok "Next.js configuré sur 127.0.0.1 (accès via Nginx)"
+else
+  # Bind toutes les interfaces — accès direct depuis le réseau
+  sed -i 's/"start": "next start.*"/"start": "next start -H 0.0.0.0"/' "$PROJECT_DIR/package.json"
+  ok "Next.js configuré sur 0.0.0.0 (accès direct port 3000)"
+  warn "Sans Nginx, les mots de passe transitent en clair sur le réseau (pas de HTTPS)"
+fi
+
+# =============================================================================
+# ÉTAPE 8 — Installation des dépendances
 # =============================================================================
 section "Installation des dépendances Node.js (npm install)"
 
@@ -229,7 +270,7 @@ npm install --silent 2>&1 | tail -5
 ok "Dépendances installées"
 
 # =============================================================================
-# ÉTAPE 7 — Base de données (migrations Prisma)
+# ÉTAPE 9 — Base de données (migrations Prisma)
 # =============================================================================
 section "Base de données SQLite (migrations Prisma)"
 
@@ -238,7 +279,7 @@ npx prisma migrate deploy 2>&1 | grep -E "(Applied|already|Migration)" || true
 ok "Base de données initialisée : $DB_PATH"
 
 # =============================================================================
-# ÉTAPE 8 — Build Next.js
+# ÉTAPE 10 — Build Next.js
 # =============================================================================
 section "Build de l'application (npm run build)"
 
@@ -247,52 +288,19 @@ npm run build 2>&1 | grep -E "(✓|✗|error|Error|warning|Route)" || true
 ok "Build terminé"
 
 # =============================================================================
-# ÉTAPE 9 — Démarrage de l'application
+# ÉTAPE 11 — Configuration Nginx (si installé)
 # =============================================================================
-if [ "$USE_PM2" = "true" ]; then
-  section "Démarrage avec PM2"
-
-  if pm2 describe sspr-app &>/dev/null; then
-    info "Redémarrage de l'instance PM2 existante..."
-    pm2 restart sspr-app --update-env
-    ok "Application redémarrée"
-  else
-    info "Création de l'instance PM2..."
-    pm2 start npm --name "sspr-app" -- start
-    ok "Application démarrée"
-  fi
-
-  pm2 save >/dev/null
-  ok "Liste PM2 sauvegardée"
-
-  # Démarrage automatique au boot
-  info "Configuration du démarrage automatique..."
-  STARTUP_CMD=$(pm2 startup 2>&1 | grep "sudo env" || true)
-  if [ -n "$STARTUP_CMD" ]; then
-    eval "$STARTUP_CMD" >/dev/null 2>&1 && ok "Démarrage automatique configuré" \
-      || warn "Échec sudo — exécutez manuellement : $STARTUP_CMD"
-  else
-    ok "Démarrage automatique déjà configuré"
-  fi
-else
-  section "Démarrage de l'application"
-  info "Lancement avec npm start (en arrière-plan)..."
-  cd "$PROJECT_DIR"
-  nohup npm start > "$PROJECT_DIR/sspr.log" 2>&1 &
-  APP_PID=$!
-  ok "Application démarrée (PID: $APP_PID)"
-  warn "L'application ne redémarrera pas automatiquement en cas de crash ou reboot."
-  info "Pour un démarrage automatique, envisagez PM2 ou créez un service systemd."
-fi
-
-# =============================================================================
-# ÉTAPE 10 — Nginx (si installé)
-# =============================================================================
-if command -v nginx &>/dev/null; then
-  section "Nginx (reverse proxy)"
+if [ "$USE_NGINX" = "true" ]; then
+  section "Configuration Nginx"
 
   NGINX_CONF="/etc/nginx/sites-available/$APP_HOSTNAME"
   NGINX_LINK="/etc/nginx/sites-enabled/$APP_HOSTNAME"
+
+  # Supprimer le site par défaut s'il existe (évite le conflit sur le port 80)
+  if [ -L "/etc/nginx/sites-enabled/default" ]; then
+    sudo rm /etc/nginx/sites-enabled/default
+    ok "Site par défaut Nginx désactivé (évite conflit port 80)"
+  fi
 
   if [ -n "${TLS_CERT_PATH:-}" ] && [ -n "${TLS_KEY_PATH:-}" ] \
      && [ -f "$TLS_CERT_PATH" ] && [ -f "$TLS_KEY_PATH" ]; then
@@ -302,13 +310,13 @@ if command -v nginx &>/dev/null; then
 # SSPR — Configuration Nginx générée par install.sh
 server {
     listen 80;
-    server_name ${APP_HOSTNAME};
+    server_name ${APP_HOSTNAME} ${SERVER_IP};
     return 301 https://\$host\$request_uri;
 }
 
 server {
     listen 443 ssl;
-    server_name ${APP_HOSTNAME};
+    server_name ${APP_HOSTNAME} ${SERVER_IP};
 
     ssl_certificate     ${TLS_CERT_PATH};
     ssl_certificate_key ${TLS_KEY_PATH};
@@ -352,7 +360,7 @@ server {
 }
 NGINXEOF
     ok "Configuration HTTP créée : $NGINX_CONF"
-    warn "Pas de certificat TLS — accès uniquement en HTTP"
+    warn "Pas de certificat TLS — accès en HTTP uniquement"
   fi
 
   # Activer le site
@@ -365,22 +373,58 @@ NGINXEOF
 
   # Tester et recharger
   if sudo nginx -t 2>/dev/null; then
-    sudo systemctl reload nginx
-    ok "Nginx rechargé"
+    sudo systemctl restart nginx
+    ok "Nginx redémarré"
   else
     warn "Erreur de configuration Nginx — vérifiez avec : sudo nginx -t"
   fi
-else
-  warn "Nginx non installé — l'application tourne sur le port 3000 directement"
-  info "Pour installer Nginx : sudo apt-get install -y nginx"
 fi
 
 # =============================================================================
-# ÉTAPE 11 — Vérification finale
+# ÉTAPE 12 — Démarrage de l'application
+# =============================================================================
+if [ "$USE_PM2" = "true" ]; then
+  section "Démarrage avec PM2"
+
+  if pm2 describe sspr-app &>/dev/null; then
+    info "Redémarrage de l'instance PM2 existante..."
+    pm2 restart sspr-app --update-env
+    ok "Application redémarrée"
+  else
+    info "Création de l'instance PM2..."
+    pm2 start npm --name "sspr-app" -- start
+    ok "Application démarrée"
+  fi
+
+  pm2 save >/dev/null
+  ok "Liste PM2 sauvegardée"
+
+  # Démarrage automatique au boot
+  info "Configuration du démarrage automatique..."
+  STARTUP_CMD=$(pm2 startup 2>&1 | grep "sudo env" || true)
+  if [ -n "$STARTUP_CMD" ]; then
+    eval "$STARTUP_CMD" >/dev/null 2>&1 && ok "Démarrage automatique configuré" \
+      || warn "Échec sudo — exécutez manuellement : $STARTUP_CMD"
+  else
+    ok "Démarrage automatique déjà configuré"
+  fi
+else
+  section "Démarrage de l'application"
+  info "Lancement avec npm start (en arrière-plan)..."
+  cd "$PROJECT_DIR"
+  nohup npm start > "$PROJECT_DIR/sspr.log" 2>&1 &
+  APP_PID=$!
+  ok "Application démarrée (PID: $APP_PID)"
+  warn "L'application ne redémarrera pas automatiquement en cas de crash ou reboot."
+  info "Pour un démarrage automatique, envisagez PM2 ou créez un service systemd."
+fi
+
+# =============================================================================
+# ÉTAPE 13 — Vérification finale
 # =============================================================================
 section "Vérification finale"
 
-sleep 2  # Laisser le temps à l'app de démarrer
+sleep 3  # Laisser le temps à l'app de démarrer
 
 if [ "$USE_PM2" = "true" ]; then
   if pm2 list 2>/dev/null | grep -q "online"; then
@@ -390,11 +434,17 @@ if [ "$USE_PM2" = "true" ]; then
   fi
 fi
 
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:3000" 2>/dev/null || echo "000")
-if [ "$HTTP_CODE" = "200" ]; then
-  ok "Réponse HTTP locale : 200"
+# Tester l'accès HTTP
+if [ "$USE_NGINX" = "true" ]; then
+  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://$SERVER_IP" 2>/dev/null || echo "000")
 else
-  warn "Réponse HTTP locale : $HTTP_CODE — l'application peut encore démarrer..."
+  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://$SERVER_IP:3000" 2>/dev/null || echo "000")
+fi
+
+if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "301" ] || [ "$HTTP_CODE" = "302" ]; then
+  ok "Réponse HTTP : $HTTP_CODE"
+else
+  warn "Réponse HTTP : $HTTP_CODE — l'application peut encore démarrer..."
   if [ "$USE_PM2" = "true" ]; then
     info "Consultez : pm2 logs sspr-app --lines 30"
   else
@@ -436,7 +486,15 @@ if [ "${TLS_REJECT}" = "false" ]; then
   echo ""
 fi
 
-if [ -n "${TLS_CERT_PATH:-}" ] && [ -f "$TLS_CERT_PATH" ] 2>/dev/null; then
+if [ "$USE_NGINX" = "true" ] && [ -z "${TLS_CERT_PATH:-}" ]; then
+  echo -e "${YELLOW}  ⚠ Pour passer en HTTPS :${RESET}"
+  echo "    1. Générez un certificat TLS (voir README.md section HTTPS)"
+  echo "    2. Renseignez TLS_CERT_PATH et TLS_KEY_PATH dans setup/config.sh"
+  echo "    3. Relancez : bash setup/install.sh"
+  echo ""
+fi
+
+if [ "$USE_NGINX" = "true" ]; then
   echo -e "${YELLOW}  → N'oubliez pas de créer l'enregistrement DNS :${RESET}"
   echo "    $APP_HOSTNAME → $SERVER_IP (enregistrement A sur votre DC)"
 fi
