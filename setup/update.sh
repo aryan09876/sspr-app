@@ -65,15 +65,26 @@ BEFORE=$(git rev-parse HEAD)
 git pull --rebase origin main 2>&1 | tail -5
 AFTER=$(git rev-parse HEAD)
 
-if [ "$BEFORE" = "$AFTER" ]; then
+# Vérifier si le build existe (.next doit contenir un build valide)
+BUILD_MISSING="false"
+if [ ! -d "$PROJECT_DIR/.next" ] || [ ! -f "$PROJECT_DIR/.next/BUILD_ID" ]; then
+  BUILD_MISSING="true"
+fi
+
+if [ "$BEFORE" = "$AFTER" ] && [ "$BUILD_MISSING" = "false" ] && [ "${1:-}" != "--force" ]; then
   ok "Déjà à jour — aucune modification"
   if [ "$STASHED" = "true" ]; then
     git stash pop --quiet 2>/dev/null || true
   fi
   echo ""
   echo -e "${GREEN}  Aucune mise à jour nécessaire.${RESET}"
+  info "Pour forcer la recompilation : bash setup/update.sh --force"
   echo ""
   exit 0
+fi
+
+if [ "$BUILD_MISSING" = "true" ]; then
+  warn "Build absent ou incomplet — recompilation nécessaire"
 fi
 
 # Afficher les changements

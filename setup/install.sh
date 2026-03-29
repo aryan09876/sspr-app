@@ -322,7 +322,7 @@ if [ "$USE_NGINX" = "true" ]; then
      && [ -f "$TLS_CERT_PATH" ] && [ -f "$TLS_KEY_PATH" ]; then
 
     # Vérifier que le certificat est en format PEM (Nginx n'accepte pas le DER)
-    if ! head -1 "$TLS_CERT_PATH" | grep -q "BEGIN"; then
+    if ! sudo head -1 "$TLS_CERT_PATH" 2>/dev/null | grep -q "BEGIN"; then
       info "Certificat en format DER détecté — conversion en PEM..."
       PEM_CERT="${TLS_CERT_PATH%.cer}.pem"
       sudo openssl x509 -inform DER -in "$TLS_CERT_PATH" -out "$PEM_CERT" 2>/dev/null \
@@ -331,7 +331,7 @@ if [ "$USE_NGINX" = "true" ]; then
     fi
 
     # Vérifier que la clé est en format PEM
-    if [ -f "$TLS_KEY_PATH" ] && ! head -1 "$TLS_KEY_PATH" | grep -q "BEGIN"; then
+    if [ -f "$TLS_KEY_PATH" ] && ! sudo head -1 "$TLS_KEY_PATH" 2>/dev/null | grep -q "BEGIN"; then
       info "Clé en format DER détecté — conversion en PEM..."
       PEM_KEY="${TLS_KEY_PATH%.key}.pem"
       sudo openssl rsa -inform DER -in "$TLS_KEY_PATH" -out "$PEM_KEY" 2>/dev/null \
@@ -408,12 +408,25 @@ NGINXEOF
   # Tester la configuration et démarrer (protégé pour ne pas bloquer le script)
   info "Test de la configuration Nginx..."
   if sudo nginx -t 2>&1; then
+    # Arrêter tout processus Nginx existant (y compris zombies/orphelins)
     sudo systemctl stop nginx 2>/dev/null || true
-    sudo systemctl start nginx 2>&1 && ok "Nginx démarré" || {
+    sudo killall nginx 2>/dev/null || true
+    sleep 1
+    # Libérer le port 80 si un autre service l'occupe (ex: apache2)
+    PORT80_PID=$(sudo lsof -ti:80 2>/dev/null || true)
+    if [ -n "$PORT80_PID" ]; then
+      PORT80_NAME=$(ps -p "$PORT80_PID" -o comm= 2>/dev/null || echo "inconnu")
+      warn "Port 80 occupé par $PORT80_NAME (PID $PORT80_PID) — arrêt..."
+      sudo kill "$PORT80_PID" 2>/dev/null || true
+      sleep 1
+    fi
+    if sudo systemctl start nginx 2>&1; then
+      ok "Nginx démarré"
+    else
       warn "Échec du démarrage Nginx — vérifiez avec :"
       info "  sudo journalctl -u nginx --no-pager -n 20"
       info "  sudo nginx -t"
-    }
+    fi
   else
     warn "Erreur de configuration Nginx — vérifiez les certificats et chemins"
     info "  sudo nginx -t"
@@ -505,6 +518,12 @@ echo -e "${BOLD}${GREEN}══════════════════�
 echo ""
 echo -e "  Application     : ${BOLD}$APP_NAME${RESET}"
 echo -e "  Accès           : ${BOLD}${APP_BASE_URL}${RESET}"
+# Afficher aussi l'accès par IP si différent de l'URL principale
+if [ "$USE_NGINX" = "true" ] && [ -n "${TLS_CERT_PATH:-}" ]; then
+  echo -e "  Accès par IP    : ${BOLD}https://$SERVER_IP${RESET}"
+elif [ "$USE_NGINX" = "true" ]; then
+  echo -e "  Accès par IP    : ${BOLD}http://$SERVER_IP${RESET}"
+fi
 echo -e "  Base de données : ${BOLD}$DB_PATH${RESET}"
 
 if [ "$USE_PM2" = "true" ]; then
@@ -538,7 +557,8 @@ if [ "$USE_NGINX" = "true" ] && [ -z "${TLS_CERT_PATH:-}" ]; then
 fi
 
 if [ "$USE_NGINX" = "true" ]; then
-  echo -e "${YELLOW}  → N'oubliez pas de créer l'enregistrement DNS :${RESET}"
-  echo "    $APP_HOSTNAME → $SERVER_IP (enregistrement A sur votre DC)"
+  echo -e "${BLUE}  ℹ DNS (optionnel) : pour accéder via ${BOLD}$APP_HOSTNAME${RESET}${BLUE}, créez un enregistrement A :${RESET}"
+  echo "    $APP_HOSTNAME → $SERVER_IP (sur votre DC)"
+  echo -e "    ${BLUE}En attendant, l'application est accessible par IP : https://$SERVER_IP${RESET}"
 fi
 echo ""
