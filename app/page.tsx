@@ -1,4 +1,5 @@
 import { ShieldCheck } from "lucide-react";
+import Link from "next/link";
 import ResetForm from "@/components/reset-form";
 import CheckAccountDialog from "@/components/check-account-dialog";
 
@@ -29,9 +30,18 @@ export default function HomePage() {
         <ResetForm />
 
         {/* Footer */}
-        <p className="text-center text-xs text-slate-400">
-          Problème ? Contactez votre administrateur.
-        </p>
+        <div className="text-center text-xs text-slate-400 space-y-1">
+          <p>Problème ? Contactez votre administrateur.</p>
+          <p>
+            <Link href="/mentions-legales" className="hover:text-slate-600 underline">
+              Mentions légales
+            </Link>
+            {" "}&mdash;{" "}
+            <Link href="/politique-confidentialite" className="hover:text-slate-600 underline">
+              Politique de confidentialité
+            </Link>
+          </p>
+        </div>
       </div>
     </main>
   );
