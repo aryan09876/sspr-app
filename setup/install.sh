@@ -343,7 +343,7 @@ client.bind(env.AD_BIND_DN, env.AD_BIND_PASSWORD, (err) => {
   process.exit(0);
 });
 setTimeout(() => { console.log('ERREUR:Timeout — le DC ne répond pas sur le port 636'); process.exit(1); }, 15000);
-" 2>&1)
+" 2>&1 || true)
 
 if echo "$LDAP_TEST_RESULT" | grep -q "^OK"; then
   ok "Connexion LDAPS réussie — le compte de service s'authentifie correctement"
