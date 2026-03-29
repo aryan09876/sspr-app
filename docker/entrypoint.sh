@@ -11,6 +11,6 @@ npx prisma migrate deploy
 echo "→ Build Next.js..."
 npm run build
 
-# Démarrer l'application
+# Démarrer l'application (écoute sur 0.0.0.0 pour être accessible depuis l'hôte)
 echo "→ Démarrage sur port 3000..."
-exec npm start
+exec npx next start -H 0.0.0.0

@@ -14,7 +14,7 @@ setup/config.sh
 prisma/dev.db
 prisma/*.db
 
-# Fichiers internes Claude Code
+# Fichiers internes IDE / outils
 .claude/
 
 # Docker — vars d'environnement de test (même fictives)

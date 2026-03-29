@@ -6,6 +6,9 @@ services:
     env_file: .env.docker
     ports:
       - "3001:3000"   # Port 3001 sur l'hôte (ne conflicte pas avec la prod sur 3000)
+    # Décommentez et adaptez pour résoudre le DC depuis le container :
+    # extra_hosts:
+    #   - "NOM_DU_DC.DOMAINE.local:IP_DU_DC"
     volumes:
       - sspr-data:/app/prisma   # Persister la base SQLite entre redémarrages
     healthcheck:
