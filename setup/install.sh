@@ -182,12 +182,23 @@ else
 fi
 
 # =============================================================================
-# ÉTAPE 5 — Génération des secrets
+# ÉTAPE 5 — Génération des secrets (ou réutilisation des existants)
 # =============================================================================
-section "Génération des secrets cryptographiques"
+section "Secrets cryptographiques"
 
-OTP_SECRET_GEN=$(openssl rand -base64 32)
-ok "OTP_SECRET généré (HMAC-SHA256, 256 bits)"
+# Si .env.local existe déjà, réutiliser l'OTP_SECRET existant (sinon les tokens en base deviennent invalides)
+EXISTING_OTP_SECRET=""
+if [ -f "$PROJECT_DIR/.env.local" ]; then
+  EXISTING_OTP_SECRET=$(grep -oP '^OTP_SECRET=\K.*' "$PROJECT_DIR/.env.local" 2>/dev/null || true)
+fi
+
+if [ -n "$EXISTING_OTP_SECRET" ]; then
+  OTP_SECRET_GEN="$EXISTING_OTP_SECRET"
+  ok "OTP_SECRET existant conservé (base de données préservée)"
+else
+  OTP_SECRET_GEN=$(openssl rand -base64 32)
+  ok "OTP_SECRET généré (HMAC-SHA256, 256 bits)"
+fi
 
 # =============================================================================
 # ÉTAPE 6 — Écriture du fichier .env.local
