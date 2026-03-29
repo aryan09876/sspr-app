@@ -148,7 +148,7 @@ fi
 # ÉTAPE 3 — Nginx (reverse proxy)
 # =============================================================================
 USE_NGINX="false"
-if command -v nginx &>/dev/null; then
+if command -v nginx &>/dev/null || [ -x /usr/sbin/nginx ]; then
   USE_NGINX="true"
   ok "Nginx déjà installé"
 else
@@ -339,8 +339,47 @@ if [ "$USE_NGINX" = "true" ]; then
         || warn "Échec de la conversion de la clé"
     fi
 
-    info "Génération de la configuration Nginx HTTPS..."
-    sudo tee "$NGINX_CONF" >/dev/null <<NGINXEOF
+    # Demander si l'utilisateur veut aussi laisser l'accès HTTP
+    echo ""
+    echo -e "  HTTPS est activé. Voulez-vous aussi autoriser l'accès HTTP"
+    echo -e "  (les visiteurs en HTTP seront redirigés automatiquement vers HTTPS) ?"
+    read -rp "  Autoriser HTTP → HTTPS ? [O/n] " HTTP_REDIRECT
+    echo ""
+
+    if [[ "$HTTP_REDIRECT" =~ ^[nN]$ ]]; then
+      # HTTPS uniquement — pas de port 80
+      info "Génération de la configuration Nginx HTTPS uniquement (port 443)..."
+      sudo tee "$NGINX_CONF" >/dev/null <<NGINXEOF
+# SSPR — Configuration Nginx générée par install.sh (HTTPS uniquement)
+server {
+    listen 443 ssl;
+    server_name ${APP_HOSTNAME} ${SERVER_IP};
+
+    ssl_certificate     ${TLS_CERT_PATH};
+    ssl_certificate_key ${TLS_KEY_PATH};
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         ECDHE-RSA-AES256-GCM-SHA512:DHE-RSA-AES256-GCM-SHA512:ECDHE-RSA-AES256-GCM-SHA384;
+    ssl_session_cache   shared:SSL:10m;
+    ssl_session_timeout 10m;
+
+    location / {
+        proxy_pass         http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header   Upgrade \$http_upgrade;
+        proxy_set_header   Connection 'upgrade';
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto \$scheme;
+        proxy_cache_bypass \$http_upgrade;
+    }
+}
+NGINXEOF
+      ok "Configuration HTTPS uniquement créée (port 80 fermé)"
+    else
+      # HTTPS + redirection HTTP → HTTPS
+      info "Génération de la configuration Nginx HTTPS + redirection HTTP..."
+      sudo tee "$NGINX_CONF" >/dev/null <<NGINXEOF
 # SSPR — Configuration Nginx générée par install.sh
 server {
     listen 80;
@@ -372,7 +411,8 @@ server {
     }
 }
 NGINXEOF
-    ok "Configuration HTTPS créée : $NGINX_CONF"
+      ok "Configuration HTTPS + redirection HTTP créée"
+    fi
 
   else
     info "Génération de la configuration Nginx HTTP..."
@@ -408,18 +448,29 @@ NGINXEOF
   # Tester la configuration et démarrer (protégé pour ne pas bloquer le script)
   info "Test de la configuration Nginx..."
   if sudo nginx -t 2>&1; then
-    # Arrêter tout processus Nginx existant (y compris zombies/orphelins)
+
+    # ── Libérer les ports 80 et 443 ──
+    # 1) Arrêter Nginx proprement
     sudo systemctl stop nginx 2>/dev/null || true
-    sudo killall nginx 2>/dev/null || true
-    sleep 1
-    # Libérer le port 80 si un autre service l'occupe (ex: apache2)
-    PORT80_PID=$(sudo lsof -ti:80 2>/dev/null || true)
-    if [ -n "$PORT80_PID" ]; then
-      PORT80_NAME=$(ps -p "$PORT80_PID" -o comm= 2>/dev/null || echo "inconnu")
-      warn "Port 80 occupé par $PORT80_NAME (PID $PORT80_PID) — arrêt..."
-      sudo kill "$PORT80_PID" 2>/dev/null || true
-      sleep 1
+    # 2) Tuer tous les processus nginx restants (zombies, orphelins)
+    sudo killall -9 nginx 2>/dev/null || true
+    # 3) Arrêter apache2 s'il tourne (conflit fréquent sur le port 80)
+    if systemctl is-active --quiet apache2 2>/dev/null; then
+      warn "Apache2 détecté sur le port 80 — arrêt et désactivation..."
+      sudo systemctl stop apache2
+      sudo systemctl disable apache2 2>/dev/null || true
     fi
+    # 4) Tuer tout ce qui reste sur les ports 80 et 443
+    for PORT in 80 443; do
+      PIDS=$(sudo fuser "${PORT}/tcp" 2>/dev/null || true)
+      if [ -n "$PIDS" ]; then
+        warn "Port $PORT encore occupé (PID: $PIDS) — arrêt forcé..."
+        sudo fuser -k "${PORT}/tcp" 2>/dev/null || true
+      fi
+    done
+    sleep 1
+
+    # ── Démarrer Nginx ──
     if sudo systemctl start nginx 2>&1; then
       ok "Nginx démarré"
     else
