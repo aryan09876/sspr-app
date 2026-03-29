@@ -321,6 +321,24 @@ if [ "$USE_NGINX" = "true" ]; then
   if [ -n "${TLS_CERT_PATH:-}" ] && [ -n "${TLS_KEY_PATH:-}" ] \
      && [ -f "$TLS_CERT_PATH" ] && [ -f "$TLS_KEY_PATH" ]; then
 
+    # Vérifier que le certificat est en format PEM (Nginx n'accepte pas le DER)
+    if ! head -1 "$TLS_CERT_PATH" | grep -q "BEGIN"; then
+      info "Certificat en format DER détecté — conversion en PEM..."
+      PEM_CERT="${TLS_CERT_PATH%.cer}.pem"
+      sudo openssl x509 -inform DER -in "$TLS_CERT_PATH" -out "$PEM_CERT" 2>/dev/null \
+        && { TLS_CERT_PATH="$PEM_CERT"; ok "Certificat converti : $PEM_CERT"; } \
+        || warn "Échec de la conversion — le certificat est peut-être déjà en PEM corrompu"
+    fi
+
+    # Vérifier que la clé est en format PEM
+    if [ -f "$TLS_KEY_PATH" ] && ! head -1 "$TLS_KEY_PATH" | grep -q "BEGIN"; then
+      info "Clé en format DER détecté — conversion en PEM..."
+      PEM_KEY="${TLS_KEY_PATH%.key}.pem"
+      sudo openssl rsa -inform DER -in "$TLS_KEY_PATH" -out "$PEM_KEY" 2>/dev/null \
+        && { TLS_KEY_PATH="$PEM_KEY"; ok "Clé convertie : $PEM_KEY"; } \
+        || warn "Échec de la conversion de la clé"
+    fi
+
     info "Génération de la configuration Nginx HTTPS..."
     sudo tee "$NGINX_CONF" >/dev/null <<NGINXEOF
 # SSPR — Configuration Nginx générée par install.sh
@@ -387,12 +405,18 @@ NGINXEOF
     ok "Site Nginx déjà activé"
   fi
 
-  # Tester et recharger
-  if sudo nginx -t 2>/dev/null; then
-    sudo systemctl restart nginx
-    ok "Nginx redémarré"
+  # Tester la configuration et démarrer (protégé pour ne pas bloquer le script)
+  info "Test de la configuration Nginx..."
+  if sudo nginx -t 2>&1; then
+    sudo systemctl stop nginx 2>/dev/null || true
+    sudo systemctl start nginx 2>&1 && ok "Nginx démarré" || {
+      warn "Échec du démarrage Nginx — vérifiez avec :"
+      info "  sudo journalctl -u nginx --no-pager -n 20"
+      info "  sudo nginx -t"
+    }
   else
-    warn "Erreur de configuration Nginx — vérifiez avec : sudo nginx -t"
+    warn "Erreur de configuration Nginx — vérifiez les certificats et chemins"
+    info "  sudo nginx -t"
   fi
 fi
 
@@ -450,8 +474,11 @@ if [ "$USE_PM2" = "true" ]; then
   fi
 fi
 
-# Tester l'accès HTTP
-if [ "$USE_NGINX" = "true" ]; then
+# Tester l'accès
+if [ "$USE_NGINX" = "true" ] && [ -n "${TLS_CERT_PATH:-}" ]; then
+  # HTTPS — on ignore les erreurs de certificat auto-signé (-k)
+  HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" "https://$SERVER_IP" 2>/dev/null || echo "000")
+elif [ "$USE_NGINX" = "true" ]; then
   HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://$SERVER_IP" 2>/dev/null || echo "000")
 else
   HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://$SERVER_IP:3000" 2>/dev/null || echo "000")
