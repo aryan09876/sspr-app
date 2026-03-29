@@ -90,6 +90,13 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    if (code === "PROTECTED_ACCOUNT") {
+      return NextResponse.json(
+        { error: (err as { message: string }).message },
+        { status: 403 }
+      );
+    }
+
     if (code === "DUPLICATE_EMAIL") {
       return NextResponse.json(
         { error: "Plusieurs comptes partagent cette adresse email. Contactez votre administrateur." },

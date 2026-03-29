@@ -304,6 +304,70 @@ npm run build 2>&1 | grep -E "(✓|✗|error|Error|warning|Route)" || true
 ok "Build terminé"
 
 # =============================================================================
+# ÉTAPE 10b — Test de connexion Active Directory
+# =============================================================================
+section "Test de connexion Active Directory"
+
+info "Vérification du bind LDAPS avec le compte de service..."
+
+# Charger .env.local et tester le bind via un script Node.js inline
+cd "$PROJECT_DIR"
+LDAP_TEST_RESULT=$(node -e "
+const ldap = require('ldapjs');
+const fs = require('fs');
+const tls = require('tls');
+
+// Charger .env.local manuellement
+const envFile = fs.readFileSync('.env.local', 'utf8');
+const env = {};
+envFile.split('\n').forEach(line => {
+  const m = line.match(/^([^#=]+)=(.*)$/);
+  if (m) env[m[1].trim()] = m[2].trim();
+});
+
+const tlsOptions = { rejectUnauthorized: env.AD_TLS_REJECT_UNAUTHORIZED !== 'false' ? true : false };
+if (env.AD_TLS_CA_CERT_PATH && fs.existsSync(env.AD_TLS_CA_CERT_PATH)) {
+  tlsOptions.ca = [fs.readFileSync(env.AD_TLS_CA_CERT_PATH)];
+}
+
+const client = ldap.createClient({ url: env.AD_URL, tlsOptions, connectTimeout: 10000 });
+client.on('error', (err) => { console.log('ERREUR:' + err.message); process.exit(1); });
+client.bind(env.AD_BIND_DN, env.AD_BIND_PASSWORD, (err) => {
+  if (err) {
+    console.log('ERREUR:' + err.message);
+    client.unbind();
+    process.exit(1);
+  }
+  console.log('OK');
+  client.unbind();
+  process.exit(0);
+});
+setTimeout(() => { console.log('ERREUR:Timeout — le DC ne répond pas sur le port 636'); process.exit(1); }, 15000);
+" 2>&1)
+
+if echo "$LDAP_TEST_RESULT" | grep -q "^OK"; then
+  ok "Connexion LDAPS réussie — le compte de service s'authentifie correctement"
+else
+  LDAP_ERR=$(echo "$LDAP_TEST_RESULT" | grep "ERREUR:" | head -1 | sed 's/ERREUR://')
+  if echo "$LDAP_ERR" | grep -qi "Invalid Credentials"; then
+    fail "Le mot de passe du compte de service est incorrect (AD_BIND_PASSWORD) ou le DN est erroné (AD_BIND_DN).
+    Vérifiez dans setup/config.sh :
+      AD_BIND_DN     = ${AD_BIND_DN}
+      AD_BIND_PASSWORD = (caché)
+    Pour trouver le bon DN :  Get-ADUser SVC-PwdReset | Select DistinguishedName  (PowerShell sur le DC)"
+  elif echo "$LDAP_ERR" | grep -qi "Timeout\|ECONNREFUSED\|ENOTFOUND"; then
+    fail "Impossible de joindre le contrôleur de domaine : ${AD_DC_HOSTNAME}:636
+    Vérifiez que :
+      1. LDAPS (port 636) est actif sur le DC
+      2. Le pare-feu autorise le port 636
+      3. /etc/hosts résout bien ${AD_DC_HOSTNAME} → ${AD_DC_IP}"
+  else
+    fail "Échec de connexion LDAP : $LDAP_ERR
+    Vérifiez votre configuration dans setup/config.sh"
+  fi
+fi
+
+# =============================================================================
 # ÉTAPE 11 — Configuration Nginx (si installé)
 # =============================================================================
 if [ "$USE_NGINX" = "true" ]; then

@@ -26,6 +26,7 @@ export interface LdapAppError {
     | "INSUFFICIENT_RIGHTS"
     | "UNWILLING_TO_PERFORM"
     | "BIND_FAILED"
+    | "PROTECTED_ACCOUNT"
     | "LDAP_ERROR";
   message: string;
 }
@@ -152,6 +153,80 @@ function escapeLdapFilter(value: string): string {
 }
 
 // ─────────────────────────────────────────────
+// Groupes protégés (comptes admin non réinitialisables)
+// ─────────────────────────────────────────────
+const PROTECTED_GROUPS = [
+  "Domain Admins",
+  "Admins du domaine",
+  "Enterprise Admins",
+  "Administrateurs de l'entreprise",
+  "Schema Admins",
+  "Administrateurs du schéma",
+  "Administrators",
+  "Administrateurs",
+  "Account Operators",
+  "Opérateurs de compte",
+  "Server Operators",
+  "Opérateurs de serveur",
+];
+
+/**
+ * Vérifie si un utilisateur appartient à un groupe protégé (admin).
+ * Utilise l'attribut memberOf de l'utilisateur.
+ */
+async function isProtectedAccount(
+  client: ldap.Client,
+  userDn: string,
+  baseDn: string
+): Promise<{ protected: boolean; group?: string }> {
+  return new Promise((resolve) => {
+    const opts: ldap.SearchOptions = {
+      scope: "base",
+      attributes: ["memberOf"],
+      filter: "(objectClass=*)",
+    };
+
+    client.search(userDn, opts, (err, res) => {
+      if (err) {
+        // En cas d'erreur, on laisse passer (fail-open pour ne pas bloquer)
+        return resolve({ protected: false });
+      }
+
+      const groups: string[] = [];
+
+      res.on("searchEntry", (entry) => {
+        const memberOf = entry.attributes.find(
+          (a) => a.type.toLowerCase() === "memberof"
+        );
+        if (memberOf) {
+          for (const val of memberOf.values) {
+            groups.push(String(val));
+          }
+        }
+      });
+
+      res.on("error", () => resolve({ protected: false }));
+
+      res.on("end", () => {
+        // Extraire le CN de chaque groupe et comparer (insensible à la casse)
+        for (const groupDn of groups) {
+          const cnMatch = groupDn.match(/^CN=([^,]+)/i);
+          if (cnMatch) {
+            const cn = cnMatch[1];
+            for (const pg of PROTECTED_GROUPS) {
+              if (cn.toLowerCase() === pg.toLowerCase()) {
+                return resolve({ protected: true, group: cn });
+              }
+            }
+          }
+        }
+        resolve({ protected: false });
+      });
+    });
+  });
+}
+
+// ─────────────────────────────────────────────
 // API publique
 // ─────────────────────────────────────────────
 
@@ -248,12 +323,15 @@ export async function findUserDnByEmail(email: string): Promise<string> {
 
 /**
  * Recherche le DN et valide que l'identifiant Windows fourni correspond.
+ * Vérifie aussi que le compte n'est pas un compte admin protégé.
  * @throws LdapAppError avec code "USER_NOT_FOUND" si email ou identifiant ne correspondent pas.
+ * @throws LdapAppError avec code "PROTECTED_ACCOUNT" si le compte est admin.
  */
 export async function findAndValidateUser(
   email: string,
   identifiant: string
 ): Promise<AdUser> {
+  const config = getConfig();
   const user = await findUserByEmail(email);
 
   if (user.sAMAccountName.toLowerCase() !== identifiant.trim().toLowerCase()) {
@@ -262,6 +340,24 @@ export async function findAndValidateUser(
       message:
         "L'email ou l'identifiant Windows ne correspondent à aucun compte. Vérifiez vos informations.",
     } satisfies LdapAppError;
+  }
+
+  // Vérifier que le compte n'est pas un admin protégé
+  const client = createClient(config);
+  try {
+    await bindAsync(client, config.bindDn, config.bindPassword);
+    const check = await isProtectedAccount(client, user.dn, config.baseDn);
+    destroyClient(client);
+    if (check.protected) {
+      throw {
+        code: "PROTECTED_ACCOUNT",
+        message: `Ce compte appartient au groupe « ${check.group} ». La réinitialisation de mot de passe des comptes administrateurs est interdite pour des raisons de sécurité.`,
+      } satisfies LdapAppError;
+    }
+  } catch (err) {
+    destroyClient(client);
+    if (isLdapAppError(err) && err.code === "PROTECTED_ACCOUNT") throw err;
+    // Si la vérification échoue (erreur réseau, etc.), on laisse passer
   }
 
   return user;
