@@ -309,7 +309,15 @@ ok "Dépendances installées"
 section "Base de données SQLite (migrations Prisma)"
 
 info "Application des migrations..."
-npx prisma migrate deploy 2>&1 | grep -E "(Applied|already|Migration)" || true
+MIGRATE_OUTPUT=$(npx prisma migrate deploy 2>&1)
+MIGRATE_STATUS=$?
+echo "$MIGRATE_OUTPUT" | grep -E "(Applied|already|Migration|Error|error)" || true
+if [ $MIGRATE_STATUS -ne 0 ]; then
+  fail "Échec de la migration Prisma. Détail :\n$MIGRATE_OUTPUT"
+fi
+if [ ! -f "$DB_PATH" ]; then
+  fail "La base de données n'a pas été créée ($DB_PATH introuvable). Vérifiez DATABASE_URL dans .env.local."
+fi
 ok "Base de données initialisée : $DB_PATH"
 
 # =============================================================================

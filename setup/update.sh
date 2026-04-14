@@ -128,7 +128,12 @@ section "Base de données"
 
 if git diff --name-only "$BEFORE".."$AFTER" | grep -q "prisma/migrations"; then
   info "Nouvelles migrations détectées..."
-  npx prisma migrate deploy 2>&1 | grep -E "(Applied|already|Migration)" || true
+  MIGRATE_OUTPUT=$(npx prisma migrate deploy 2>&1)
+  MIGRATE_STATUS=$?
+  echo "$MIGRATE_OUTPUT" | grep -E "(Applied|already|Migration|Error|error)" || true
+  if [ $MIGRATE_STATUS -ne 0 ]; then
+    fail "Échec de la migration Prisma. Détail :\n$MIGRATE_OUTPUT"
+  fi
   ok "Migrations appliquées"
 else
   ok "Schéma de base de données inchangé"
