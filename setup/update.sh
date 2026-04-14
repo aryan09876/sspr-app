@@ -84,6 +84,21 @@ if [ "$BEFORE" = "$AFTER" ] && [ "$BUILD_MISSING" = "false" ] && [ "${1:-}" != "
   if [ "$STASHED" = "true" ]; then
     git stash pop --quiet 2>/dev/null || true
   fi
+
+  # Vérifier quand même que la base de données existe (installation incomplète possible)
+  DB_PATH="$PROJECT_DIR/prisma/dev.db"
+  if [ ! -f "$DB_PATH" ]; then
+    warn "Base de données absente — initialisation en cours..."
+    MIGRATE_OUTPUT=$(npx prisma migrate deploy 2>&1)
+    MIGRATE_STATUS=$?
+    echo "$MIGRATE_OUTPUT" | grep -E "(Applied|already|Migration|Error|error)" || true
+    if [ $MIGRATE_STATUS -ne 0 ]; then
+      fail "Échec de la migration Prisma. Détail :\n$MIGRATE_OUTPUT"
+    fi
+    ok "Base de données initialisée : $DB_PATH"
+    pm2 restart sspr-app --update-env 2>/dev/null || true
+  fi
+
   echo ""
   echo -e "${GREEN}  Aucune mise à jour nécessaire.${RESET}"
   info "Pour forcer la recompilation : bash setup/update.sh --force"
