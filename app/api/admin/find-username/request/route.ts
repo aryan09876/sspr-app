@@ -58,7 +58,8 @@ export async function POST(req: NextRequest) {
       console.error("[SSPR] Erreur envoi email OTP (find-username):", err);
     });
 
-    console.log(`[SSPR] OTP find-username envoyé à ${email} depuis IP ${ip}`);
+    const maskedEmail = email.replace(/(?<=.{2})[^@]+(?=@)/, "***");
+    console.log(`[SSPR] OTP find-username envoyé à ${maskedEmail} depuis IP ${ip}`);
 
     return NextResponse.json(
       { message: "Un code de vérification a été envoyé à votre adresse email." },

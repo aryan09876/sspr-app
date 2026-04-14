@@ -96,7 +96,8 @@ export async function POST(req: NextRequest) {
       data: { consumedAt: new Date() },
     });
 
-    console.log(`[SSPR] Mot de passe réinitialisé pour ${token.email} (DN: ${token.adDn})`);
+    const maskedEmail = token.email.replace(/(?<=.{2})[^@]+(?=@)/, "***");
+    console.log(`[SSPR] Mot de passe réinitialisé pour ${maskedEmail}`);
 
     return NextResponse.json(
       { message: "Mot de passe réinitialisé avec succès ! Vous pouvez maintenant vous connecter avec votre nouveau mot de passe." },

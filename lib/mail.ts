@@ -180,7 +180,7 @@ export async function sendOtpEmail(to: string, otp: string): Promise<void> {
   await transporter.sendMail({
     from: `"${appName} SSPR" <${from}>`,
     to,
-    subject: `[${otp}] Votre code de réinitialisation de mot de passe`,
+    subject: `Votre code de réinitialisation de mot de passe — ${appName}`,
     html,
     text,
   });

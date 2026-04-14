@@ -130,9 +130,8 @@ export default function PolitiqueConfidentialite() {
             7. Cookies et stockage local
           </h2>
           <p>
-            Ce site n&apos;utilise <strong>aucun cookie</strong>. Un unique élément de stockage local
-            (<code>localStorage</code>) est utilisé pour mémoriser votre acceptation de cette
-            politique. Il ne contient aucune donnée personnelle.
+            Ce site n&apos;utilise <strong>aucun cookie</strong> et aucun stockage local.
+            Aucune donnée de navigation n&apos;est conservée dans le navigateur.
           </p>
 
           <h2 className="text-lg font-semibold text-slate-900">

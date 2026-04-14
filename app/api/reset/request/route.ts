@@ -72,7 +72,9 @@ export async function POST(req: NextRequest) {
       console.error("[SSPR] Erreur envoi email OTP:", err);
     });
 
-    console.log(`[SSPR] OTP généré pour ${email} (${identifiant}) depuis IP ${ip}`);
+    // Log pseudonymisé : domaine email masqué, identifiant omis, IP loggée pour audit sécurité
+    const maskedEmail = email.replace(/(?<=.{2})[^@]+(?=@)/, "***");
+    console.log(`[SSPR] OTP généré pour ${maskedEmail} depuis IP ${ip}`);
 
     return NextResponse.json(
       { message: "Un code de vérification a été envoyé à votre adresse email." },
