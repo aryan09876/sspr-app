@@ -10,6 +10,10 @@ function createTransporter() {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS,
     },
+    // Timeouts explicites pour éviter un blocage silencieux si le port est filtré
+    connectionTimeout: 10000,  // 10 s pour établir la connexion TCP
+    greetingTimeout: 10000,    // 10 s pour recevoir le EHLO du serveur
+    socketTimeout: 20000,      // 20 s d'inactivité max sur le socket
   });
 }
 

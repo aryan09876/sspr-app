@@ -18,8 +18,16 @@ const REQUIRED_VARS = [
   "APP_BASE_URL",
 ];
 
+/** Applique un timeout à une Promise — renvoie `fallback` si dépassé. */
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),
+  ]);
+}
+
 export async function GET() {
-  // 1. Variables d'environnement
+  // 1. Variables d'environnement (synchrone)
   const missingVars = REQUIRED_VARS.filter((v) => !process.env[v]);
   const configOk = missingVars.length === 0;
 
@@ -35,38 +43,46 @@ export async function GET() {
     dbResult = {
       ok: false,
       detail: isNoTable
-        ? "Table PasswordResetToken absente — lancez : npx prisma migrate deploy"
+        ? "Table PasswordResetToken absente — lancez : bash setup/update.sh --force"
         : `Erreur DB : ${msg}`,
     };
   }
 
-  // 3. LDAP / AD
-  let ldapResult: { ok: boolean; detail: string };
-  try {
-    const r = await testLdapConnection();
-    ldapResult = {
-      ok: r.success,
-      detail: r.success
-        ? `Connexion LDAPS réussie (${process.env.AD_URL ?? ""})`
-        : `Échec LDAPS : ${r.error ?? "erreur inconnue"}`,
-    };
-  } catch (err) {
-    ldapResult = { ok: false, detail: `Exception LDAP : ${err instanceof Error ? err.message : String(err)}` };
-  }
+  // 3. LDAP et 4. SMTP — en parallèle, avec timeout individuel de 15 s
+  const TIMEOUT_MS = 15000;
 
-  // 4. SMTP
-  let smtpResult: { ok: boolean; detail: string };
-  try {
-    const r = await testSmtpConnection();
-    smtpResult = {
-      ok: r.success,
-      detail: r.success
-        ? `Connexion SMTP réussie (${process.env.SMTP_HOST ?? ""}:${process.env.SMTP_PORT ?? "587"})`
-        : `Échec SMTP : ${r.error ?? "erreur inconnue"}`,
-    };
-  } catch (err) {
-    smtpResult = { ok: false, detail: `Exception SMTP : ${err instanceof Error ? err.message : String(err)}` };
-  }
+  const [ldapResult, smtpResult] = await Promise.all([
+    withTimeout(
+      testLdapConnection()
+        .then((r) => ({
+          ok: r.success,
+          detail: r.success
+            ? `Connexion LDAPS réussie (${process.env.AD_URL ?? ""})`
+            : `Échec LDAPS : ${r.error ?? "erreur inconnue"}`,
+        }))
+        .catch((err) => ({
+          ok: false,
+          detail: `Exception LDAP : ${err instanceof Error ? err.message : String(err)}`,
+        })),
+      TIMEOUT_MS,
+      { ok: false, detail: `Timeout LDAPS (>${TIMEOUT_MS / 1000}s) — DC inaccessible ou pare-feu bloquant` },
+    ),
+    withTimeout(
+      testSmtpConnection()
+        .then((r) => ({
+          ok: r.success,
+          detail: r.success
+            ? `Connexion SMTP réussie (${process.env.SMTP_HOST ?? ""}:${process.env.SMTP_PORT ?? "587"})`
+            : `Échec SMTP : ${r.error ?? "erreur inconnue"}`,
+        }))
+        .catch((err) => ({
+          ok: false,
+          detail: `Exception SMTP : ${err instanceof Error ? err.message : String(err)}`,
+        })),
+      TIMEOUT_MS,
+      { ok: false, detail: `Timeout SMTP (>${TIMEOUT_MS / 1000}s) — port ${process.env.SMTP_PORT ?? "587"} bloqué ou serveur inaccessible` },
+    ),
+  ]);
 
   const allOk = configOk && dbResult.ok && ldapResult.ok && smtpResult.ok;
 

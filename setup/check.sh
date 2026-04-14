@@ -49,6 +49,7 @@ AD_BASE_DN=$(get_env AD_BASE_DN)
 AD_BIND_DN=$(get_env AD_BIND_DN)
 AD_BIND_PASSWORD=$(get_env AD_BIND_PASSWORD)
 AD_TLS_REJECT=$(get_env AD_TLS_REJECT_UNAUTHORIZED)
+AD_TLS_CA=$(get_env AD_TLS_CA_CERT_PATH)
 SMTP_HOST=$(get_env SMTP_HOST)
 SMTP_PORT=$(get_env SMTP_PORT)
 SMTP_USER=$(get_env SMTP_USER)
@@ -150,14 +151,12 @@ const { testLdapConnection } = require('./.next/server/chunks/$(ls "$PROJECT_DIR
 
 # Utiliser directement node avec le fichier compilé si disponible
 LDAP_TEST_RESULT=$(cd "$PROJECT_DIR" && node -e "
-process.env.AD_URL = process.env.AD_URL || '$AD_URL';
-process.env.AD_BASE_DN = process.env.AD_BASE_DN || '$AD_BASE_DN';
-process.env.AD_BIND_DN = process.env.AD_BIND_DN || '$AD_BIND_DN';
-process.env.AD_BIND_PASSWORD = process.env.AD_BIND_PASSWORD || '$AD_BIND_PASSWORD';
-process.env.AD_TLS_REJECT_UNAUTHORIZED = '$AD_TLS_REJECT';
 const ldap = require('ldapjs');
-const tls = require('tls');
+const fs = require('fs');
 const tlsOptions = { rejectUnauthorized: '$AD_TLS_REJECT' !== 'false' };
+// Charger le certificat CA interne si disponible (même logique que l'application)
+const caPath = '$AD_TLS_CA';
+if (caPath && fs.existsSync(caPath)) { tlsOptions.ca = [fs.readFileSync(caPath)]; }
 const client = ldap.createClient({ url: '$AD_URL', tlsOptions, connectTimeout: 8000, timeout: 10000 });
 let done = false;
 const timeout = setTimeout(() => { if (!done) { done=true; console.log('TIMEOUT'); client.destroy(); } }, 10000);
@@ -194,28 +193,35 @@ section "Connexion SMTP"
 
 info "Serveur : $SMTP_HOST:${SMTP_PORT:-587} (utilisateur : $SMTP_USER)"
 
-SMTP_RESULT=$(cd "$PROJECT_DIR" && timeout 15 node -e "
+SMTP_RESULT=$(cd "$PROJECT_DIR" && timeout 20 node -e "
 const nodemailer = require('nodemailer');
 const t = nodemailer.createTransport({
   host: '$SMTP_HOST',
   port: ${SMTP_PORT:-587},
   secure: false,
-  auth: { user: '$SMTP_USER', pass: '$SMTP_PASS' }
+  auth: { user: '$SMTP_USER', pass: '$SMTP_PASS' },
+  connectionTimeout: 12000,
+  greetingTimeout: 12000,
+  socketTimeout: 15000
 });
 t.verify().then(() => { console.log('OK'); process.exit(0); })
   .catch(e => { console.log('ERR:' + e.message); process.exit(1); });
-" 2>/dev/null || echo "ERR:timeout ou node failed")
+" 2>/dev/null || echo "ERR:Timeout dépassé — port ${SMTP_PORT:-587} bloqué ou réseau inaccessible")
 
 if [ "$SMTP_RESULT" = "OK" ]; then
   ok "Connexion SMTP réussie"
 else
   MSG=$(echo "$SMTP_RESULT" | sed 's/ERR://')
   fail "Échec SMTP : $MSG"
-  if echo "$MSG" | grep -qi "invalid login\|535\|authentication"; then
+  if echo "$MSG" | grep -qi "invalid login\|535\|authentication\|Username and Password"; then
     info "Identifiants Gmail incorrects — vérifiez SMTP_PASS (mot de passe d'application)"
     info "Générez-en un sur : https://myaccount.google.com/apppasswords"
+    info "Vérifiez que la validation en 2 étapes est activée sur le compte Gmail"
   elif echo "$MSG" | grep -qi "ECONNREFUSED\|ENOTFOUND"; then
     info "Serveur SMTP inaccessible — vérifiez SMTP_HOST et la connectivité internet"
+  elif echo "$MSG" | grep -qi "Timeout\|timeout\|ETIMEDOUT"; then
+    info "Le port ${SMTP_PORT:-587} est probablement bloqué par le pare-feu de la VM ou du réseau"
+    info "Testez : timeout 5 bash -c 'echo >/dev/tcp/$SMTP_HOST/${SMTP_PORT:-587}' && echo 'Port OK' || echo 'Port BLOQUÉ'"
   fi
 fi
 
