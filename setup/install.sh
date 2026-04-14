@@ -352,7 +352,7 @@ const envFile = fs.readFileSync('.env.local', 'utf8');
 const env = {};
 envFile.split('\n').forEach(line => {
   const m = line.match(/^([^#=]+)=(.*)$/);
-  if (m) env[m[1].trim()] = m[2].trim();
+  if (m) { let v = m[2].trim(); if ((v[0]==='"'&&v[v.length-1]==='"')||(v[0]==="'"&&v[v.length-1]==="'")) v=v.slice(1,-1); env[m[1].trim()]=v; }
 });
 
 const tlsOptions = { rejectUnauthorized: env.AD_TLS_REJECT_UNAUTHORIZED !== 'false' ? true : false };
