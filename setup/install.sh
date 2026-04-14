@@ -340,46 +340,42 @@ section "Test de connexion Active Directory"
 
 info "Vérification du bind LDAPS avec le compte de service..."
 
-# Charger .env.local et tester le bind via un script Node.js inline
 cd "$PROJECT_DIR"
+# Extraire les valeurs depuis .env.local en bash (sans exécuter le fichier),
+# exactement comme check.sh — évite tout problème de guillemets dans le JS inline
+_env_get() { grep "^${1}=" .env.local | head -1 | cut -d= -f2- | tr -d '"'; }
+_LDAP_URL=$(_env_get AD_URL)
+_LDAP_DN=$(_env_get AD_BIND_DN)
+_LDAP_PW=$(_env_get AD_BIND_PASSWORD)
+_LDAP_REJECT=$(_env_get AD_TLS_REJECT_UNAUTHORIZED)
+_LDAP_CA=$(_env_get AD_TLS_CA_CERT_PATH)
+
 LDAP_TEST_RESULT=$(node -e "
 const ldap = require('ldapjs');
 const fs = require('fs');
-const tls = require('tls');
-
-// Charger .env.local manuellement
-const envFile = fs.readFileSync('.env.local', 'utf8');
-const env = {};
-envFile.split('\n').forEach(line => {
-  const m = line.match(/^([^#=]+)=(.*)$/);
-  if (m) { let v = m[2].trim(); if ((v[0]==='"'&&v[v.length-1]==='"')||(v[0]==="'"&&v[v.length-1]==="'")) v=v.slice(1,-1); env[m[1].trim()]=v; }
-});
-
-const tlsOptions = { rejectUnauthorized: env.AD_TLS_REJECT_UNAUTHORIZED !== 'false' ? true : false };
-if (env.AD_TLS_CA_CERT_PATH && fs.existsSync(env.AD_TLS_CA_CERT_PATH)) {
-  tlsOptions.ca = [fs.readFileSync(env.AD_TLS_CA_CERT_PATH)];
-}
-
-const client = ldap.createClient({ url: env.AD_URL, tlsOptions, connectTimeout: 10000 });
-client.on('error', (err) => { console.log('ERREUR:' + err.message); process.exit(1); });
-client.bind(env.AD_BIND_DN, env.AD_BIND_PASSWORD, (err) => {
-  if (err) {
-    console.log('ERREUR:' + err.message);
-    client.unbind();
-    process.exit(1);
+const tlsOptions = { rejectUnauthorized: '$_LDAP_REJECT' !== 'false' };
+if ('$_LDAP_CA' && fs.existsSync('$_LDAP_CA')) { tlsOptions.ca = [fs.readFileSync('$_LDAP_CA')]; }
+const client = ldap.createClient({ url: '$_LDAP_URL', tlsOptions, connectTimeout: 10000 });
+let done = false;
+const t = setTimeout(() => { if(!done){done=true;console.log('ERREUR:Timeout');client.destroy();process.exit(1);} }, 12000);
+client.on('error', (err) => { if(!done){done=true;clearTimeout(t);console.log('ERREUR:' + err.message);client.destroy();process.exit(1);} });
+client.bind('$_LDAP_DN', '$_LDAP_PW', (err) => {
+  if(!done){done=true;clearTimeout(t);
+    if (err) { console.log('ERREUR:' + err.message); try{client.unbind();}catch(e){} process.exit(1); }
+    console.log('OK');
+    try{client.unbind();}catch(e){} process.exit(0);
   }
-  console.log('OK');
-  client.unbind();
-  process.exit(0);
 });
-setTimeout(() => { console.log('ERREUR:Timeout — le DC ne répond pas sur le port 636'); process.exit(1); }, 15000);
 " 2>&1 || true)
 
 if echo "$LDAP_TEST_RESULT" | grep -q "^OK"; then
   ok "Connexion LDAPS réussie — le compte de service s'authentifie correctement"
 else
   LDAP_ERR=$(echo "$LDAP_TEST_RESULT" | grep "ERREUR:" | head -1 | sed 's/ERREUR://')
-  if echo "$LDAP_ERR" | grep -qi "Invalid Credentials"; then
+  if [ -z "$LDAP_ERR" ]; then
+    LDAP_ERR="Erreur inconnue (sortie node vide)"
+  fi
+  if echo "$LDAP_ERR" | grep -qi "Invalid Credentials\|credential"; then
     fail "Le mot de passe du compte de service est incorrect (AD_BIND_PASSWORD) ou le DN est erroné (AD_BIND_DN).
     Vérifiez dans setup/config.sh :
       AD_BIND_DN     = ${AD_BIND_DN}
@@ -391,6 +387,9 @@ else
       1. LDAPS (port 636) est actif sur le DC
       2. Le pare-feu autorise le port 636
       3. /etc/hosts résout bien ${AD_DC_HOSTNAME} → ${AD_DC_IP}"
+  elif echo "$LDAP_ERR" | grep -qi "certificate\|tls\|ssl"; then
+    fail "Erreur de certificat TLS LDAPS : $LDAP_ERR
+    Vérifiez AD_CA_CERT_PATH dans config.sh ou mettez AD_CA_CERT_PATH=\"\" pour désactiver la validation TLS"
   else
     fail "Échec de connexion LDAP : $LDAP_ERR
     Vérifiez votre configuration dans setup/config.sh"
