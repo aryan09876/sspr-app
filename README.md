@@ -338,6 +338,31 @@ Configuration ordinateur → Paramètres Windows → Paramètres de sécurité
 
 ---
 
+## Désinstallation
+
+```bash
+bash setup/uninstall.sh
+```
+
+Le script demande confirmation avant chaque action irréversible et propose 3 options pour la base de données :
+
+| Option | Effet |
+|---|---|
+| `1` — Supprimer | Base de données effacée définitivement |
+| `2` — Sauvegarder | Copie dans `~/sspr-db-backup-YYYY-MM-DD_HH-MM/` puis suppression |
+| `3` — Conserver | Fichier laissé en place dans `prisma/dev.db` |
+
+Le script supprime dans l'ordre :
+1. Le processus PM2 `sspr-app`
+2. La configuration Nginx + rechargement
+3. L'entrée `/etc/hosts` du contrôleur de domaine
+4. La base de données (selon le choix)
+5. Le dossier du projet (confirmation séparée)
+
+Node.js, npm et PM2 sont intentionnellement conservés (ils peuvent servir à d'autres projets).
+
+---
+
 ## Commandes utiles
 
 ```bash
