@@ -301,7 +301,7 @@ export async function findUserByEmail(email: string): Promise<AdUser> {
             return reject({
               code: "DUPLICATE_EMAIL",
               message:
-                "Plusieurs comptes Active Directory partagent cette adresse email. Contactez votre administrateur.",
+                "Plusieurs comptes Active Directory partagent cette adresse email. Pour réinitialiser votre mot de passe, utilisez l'onglet principal en saisissant aussi votre identifiant Windows.",
             } satisfies LdapAppError);
           }
 
@@ -322,9 +322,10 @@ export async function findUserDnByEmail(email: string): Promise<string> {
 }
 
 /**
- * Recherche le DN et valide que l'identifiant Windows fourni correspond.
+ * Recherche le DN en filtrant simultanément sur email ET sAMAccountName.
+ * Fonctionne même si plusieurs comptes partagent la même adresse email.
  * Vérifie aussi que le compte n'est pas un compte admin protégé.
- * @throws LdapAppError avec code "USER_NOT_FOUND" si email ou identifiant ne correspondent pas.
+ * @throws LdapAppError avec code "USER_NOT_FOUND" si aucun compte ne correspond.
  * @throws LdapAppError avec code "PROTECTED_ACCOUNT" si le compte est admin.
  */
 export async function findAndValidateUser(
@@ -332,35 +333,86 @@ export async function findAndValidateUser(
   identifiant: string
 ): Promise<AdUser> {
   const config = getConfig();
-  const user = await findUserByEmail(email);
-
-  if (user.sAMAccountName.toLowerCase() !== identifiant.trim().toLowerCase()) {
-    throw {
-      code: "USER_NOT_FOUND",
-      message:
-        "L'email ou l'identifiant Windows ne correspondent à aucun compte. Vérifiez vos informations.",
-    } satisfies LdapAppError;
-  }
-
-  // Vérifier que le compte n'est pas un admin protégé
   const client = createClient(config);
+
   try {
     await bindAsync(client, config.bindDn, config.bindPassword);
-    const check = await isProtectedAccount(client, user.dn, config.baseDn);
-    destroyClient(client);
-    if (check.protected) {
-      throw {
-        code: "PROTECTED_ACCOUNT",
-        message: `Ce compte appartient au groupe « ${check.group} ». La réinitialisation de mot de passe des comptes administrateurs est interdite pour des raisons de sécurité.`,
-      } satisfies LdapAppError;
+
+    const user = await new Promise<AdUser>((resolve, reject) => {
+      // Filtre combiné : email ET sAMAccountName — retourne 0 ou 1 résultat même si email partagé
+      const filter = `(&(objectClass=user)(mail=${escapeLdapFilter(email)})(sAMAccountName=${escapeLdapFilter(identifiant.trim())}))`;
+      const opts: ldap.SearchOptions = {
+        filter,
+        scope: "sub",
+        attributes: ["dn", "sAMAccountName"],
+      };
+      const found: AdUser[] = [];
+
+      client.search(config.baseDn, opts, (err, res) => {
+        if (err) {
+          destroyClient(client);
+          return reject({
+            code: "LDAP_ERROR",
+            message: `Erreur LDAP : ${err.message}`,
+          } satisfies LdapAppError);
+        }
+
+        res.on("searchEntry", (entry) => {
+          const dn =
+            typeof entry.objectName === "string"
+              ? entry.objectName
+              : String(entry.objectName);
+          const sam = entry.attributes.find(
+            (a) => a.type.toLowerCase() === "samaccountname"
+          );
+          found.push({ dn, sAMAccountName: sam ? String(sam.values[0]) : "" });
+        });
+
+        res.on("error", (err) => {
+          destroyClient(client);
+          reject({
+            code: "LDAP_ERROR",
+            message: `Erreur de recherche : ${err.message}`,
+          } satisfies LdapAppError);
+        });
+
+        res.on("end", () => {
+          destroyClient(client);
+          if (found.length === 0) {
+            return reject({
+              code: "USER_NOT_FOUND",
+              message:
+                "L'email ou l'identifiant Windows ne correspondent à aucun compte Active Directory. Vérifiez vos informations.",
+            } satisfies LdapAppError);
+          }
+          resolve(found[0]);
+        });
+      });
+    });
+
+    // Vérifier que le compte n'est pas un admin protégé
+    const client2 = createClient(config);
+    try {
+      await bindAsync(client2, config.bindDn, config.bindPassword);
+      const check = await isProtectedAccount(client2, user.dn, config.baseDn);
+      destroyClient(client2);
+      if (check.protected) {
+        throw {
+          code: "PROTECTED_ACCOUNT",
+          message: `Ce compte appartient au groupe « ${check.group} ». La réinitialisation de mot de passe des comptes administrateurs est interdite pour des raisons de sécurité.`,
+        } satisfies LdapAppError;
+      }
+    } catch (err) {
+      destroyClient(client2);
+      if (isLdapAppError(err) && err.code === "PROTECTED_ACCOUNT") throw err;
+      // Si la vérification échoue (erreur réseau, etc.), on laisse passer
     }
+
+    return user;
   } catch (err) {
     destroyClient(client);
-    if (isLdapAppError(err) && err.code === "PROTECTED_ACCOUNT") throw err;
-    // Si la vérification échoue (erreur réseau, etc.), on laisse passer
+    throw err;
   }
-
-  return user;
 }
 
 /**

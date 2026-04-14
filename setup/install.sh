@@ -21,6 +21,24 @@ warn() { echo -e "${YELLOW}  ⚠${RESET} $*"; }
 fail() { echo -e "${RED}  ✗ ERREUR :${RESET} $*"; exit 1; }
 section() { echo -e "\n${BOLD}${BLUE}══ $* ══${RESET}"; }
 
+# ─── Prérequis système ───────────────────────────────────────────────────────
+if ! grep -qiE 'debian|ubuntu' /etc/os-release 2>/dev/null; then
+  echo "ERREUR : Ce script nécessite Debian ou Ubuntu." >&2
+  exit 1
+fi
+
+if ! command -v curl &>/dev/null; then
+  echo "  → Installation de curl..."
+  sudo apt-get update -qq && sudo apt-get install -y -qq curl
+  command -v curl &>/dev/null || { echo "ERREUR : impossible d'installer curl" >&2; exit 1; }
+fi
+
+if ! command -v git &>/dev/null; then
+  echo "  → Installation de git..."
+  sudo apt-get install -y -qq git
+  command -v git &>/dev/null || { echo "ERREUR : impossible d'installer git" >&2; exit 1; }
+fi
+
 # ─── Bannière ────────────────────────────────────────────────────────────────
 echo -e "${BOLD}"
 echo "  ╔══════════════════════════════════════════╗"

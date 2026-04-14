@@ -40,6 +40,14 @@ if [ ! -f "$PROJECT_DIR/.env.local" ]; then
   fail ".env.local introuvable. Lancez d'abord : bash setup/install.sh"
 fi
 
+if ! command -v git &>/dev/null; then
+  fail "git n'est pas installé. Lancez : sudo apt-get install -y git"
+fi
+
+if ! command -v curl &>/dev/null; then
+  fail "curl n'est pas installé. Lancez : sudo apt-get install -y curl"
+fi
+
 if ! git rev-parse --is-inside-work-tree &>/dev/null; then
   fail "Ce dossier n'est pas un dépôt Git. Mise à jour impossible."
 fi
