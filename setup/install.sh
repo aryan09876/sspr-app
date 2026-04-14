@@ -255,24 +255,24 @@ cat > "$PROJECT_DIR/.env.local" <<EOF
 DATABASE_URL=file:${DB_PATH}
 
 AD_URL=ldaps://${AD_DC_HOSTNAME}:636
-AD_BASE_DN=${AD_BASE_DN}
-AD_BIND_DN=${AD_BIND_DN}
-AD_BIND_PASSWORD=${AD_BIND_PASSWORD}
+AD_BASE_DN="${AD_BASE_DN}"
+AD_BIND_DN="${AD_BIND_DN}"
+AD_BIND_PASSWORD="${AD_BIND_PASSWORD}"
 AD_TLS_REJECT_UNAUTHORIZED=${TLS_REJECT}
 ${TLS_CA_LINE}
 
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
 SMTP_SECURE=false
-SMTP_USER=${SMTP_USER}
-SMTP_PASS=${SMTP_PASS}
-SMTP_FROM=${SMTP_USER}
+SMTP_USER="${SMTP_USER}"
+SMTP_PASS="${SMTP_PASS}"
+SMTP_FROM="${SMTP_USER}"
 
 OTP_SECRET=${OTP_SECRET_GEN}
 
-APP_BASE_URL=${APP_BASE_URL}
+APP_BASE_URL="${APP_BASE_URL}"
 
-APP_NAME=${APP_NAME}
+APP_NAME="${APP_NAME}"
 EOF
 
 ok ".env.local créé dans $PROJECT_DIR"
@@ -308,11 +308,9 @@ ok "Dépendances installées"
 # =============================================================================
 section "Base de données SQLite (migrations Prisma)"
 
-# Charger .env.local pour que Prisma ait accès à DATABASE_URL
-set -o allexport
-# shellcheck source=/dev/null
-source "$PROJECT_DIR/.env.local"
-set +o allexport
+# Extraire DATABASE_URL sans exécuter tout le fichier (évite les erreurs sur les valeurs avec espaces)
+export DATABASE_URL
+DATABASE_URL=$(grep '^DATABASE_URL=' "$PROJECT_DIR/.env.local" | head -1 | cut -d= -f2-)
 
 info "Application des migrations..."
 MIGRATE_OUTPUT=$(npx prisma migrate deploy 2>&1)
