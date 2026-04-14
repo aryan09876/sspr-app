@@ -100,10 +100,19 @@ if [ "$BEFORE" = "$AFTER" ] && [ "$BUILD_MISSING" = "false" ] && [ "${1:-}" != "
     fail "Échec de la migration Prisma. Détail :\n$MIGRATE_OUTPUT"
   fi
   ok "Base de données vérifiée : $DB_PATH"
-  # Redémarrer si une migration a été appliquée
-  if echo "$MIGRATE_OUTPUT" | grep -q "Applied\|Applying"; then
-    pm2 restart sspr-app --update-env 2>/dev/null || true
-    ok "Application redémarrée (migration appliquée)"
+  # Démarrer ou redémarrer PM2
+  if command -v pm2 &>/dev/null; then
+    if pm2 describe sspr-app &>/dev/null 2>&1; then
+      if echo "$MIGRATE_OUTPUT" | grep -q "Applied\|Applying"; then
+        pm2 restart sspr-app --update-env 2>/dev/null || true
+        ok "Application redémarrée (migration appliquée)"
+      fi
+    else
+      info "Processus sspr-app absent — création..."
+      pm2 start npm --name "sspr-app" -- start
+      pm2 save
+      ok "Application démarrée (PM2) — nouvelle instance créée"
+    fi
   fi
 
   echo ""
@@ -178,11 +187,18 @@ ok "Build terminé"
 # =============================================================================
 section "Redémarrage"
 
-if command -v pm2 &>/dev/null && pm2 describe sspr-app &>/dev/null; then
-  pm2 restart sspr-app --update-env
-  ok "Application redémarrée (PM2)"
+if command -v pm2 &>/dev/null; then
+  if pm2 describe sspr-app &>/dev/null 2>&1; then
+    pm2 restart sspr-app --update-env
+    ok "Application redémarrée (PM2)"
+  else
+    info "Processus sspr-app absent — création..."
+    pm2 start npm --name "sspr-app" -- start
+    pm2 save
+    ok "Application démarrée (PM2) — nouvelle instance créée"
+  fi
 else
-  warn "PM2 non détecté — redémarrez manuellement : npm start"
+  warn "PM2 non installé — installez-le : sudo npm i -g pm2"
 fi
 
 # =============================================================================
