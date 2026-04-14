@@ -40,6 +40,12 @@ if [ ! -f "$PROJECT_DIR/.env.local" ]; then
   fail ".env.local introuvable. Lancez d'abord : bash setup/install.sh"
 fi
 
+# Charger les variables d'environnement pour Prisma (DATABASE_URL etc.)
+set -o allexport
+# shellcheck source=/dev/null
+source "$PROJECT_DIR/.env.local"
+set +o allexport
+
 if ! command -v git &>/dev/null; then
   fail "git n'est pas installé. Lancez : sudo apt-get install -y git"
 fi

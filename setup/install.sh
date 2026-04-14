@@ -308,6 +308,12 @@ ok "Dépendances installées"
 # =============================================================================
 section "Base de données SQLite (migrations Prisma)"
 
+# Charger .env.local pour que Prisma ait accès à DATABASE_URL
+set -o allexport
+# shellcheck source=/dev/null
+source "$PROJECT_DIR/.env.local"
+set +o allexport
+
 info "Application des migrations..."
 MIGRATE_OUTPUT=$(npx prisma migrate deploy 2>&1)
 MIGRATE_STATUS=$?
