@@ -1,4 +1,4 @@
-import { ShieldCheck } from "lucide-react";
+import { ShieldCheck, Activity } from "lucide-react";
 import Link from "next/link";
 import ResetForm from "@/components/reset-form";
 import CheckAccountDialog from "@/components/check-account-dialog";
@@ -8,7 +8,15 @@ export default function HomePage() {
   return (
     <main className="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100 flex items-center justify-center p-4">
       {/* Bouton admin discret en haut à droite */}
-      <div className="fixed top-4 right-4 z-50">
+      <div className="fixed top-4 right-4 z-50 flex items-center gap-2">
+        <Link
+          href="/diagnostic"
+          className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-500 shadow-sm hover:text-slate-700 hover:border-slate-300 transition-colors"
+          title="Diagnostic système"
+        >
+          <Activity className="h-3.5 w-3.5" />
+          Diagnostic
+        </Link>
         <CheckAccountDialog />
       </div>
 

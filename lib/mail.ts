@@ -22,6 +22,16 @@ const SVG_CLOCK = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12
 
 const SVG_CHECK = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
 
+export async function testSmtpConnection(): Promise<{ success: boolean; error?: string }> {
+  try {
+    const transporter = createTransporter();
+    await transporter.verify();
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 export async function sendOtpEmail(to: string, otp: string): Promise<void> {
   const transporter = createTransporter();
   const from = process.env.SMTP_FROM ?? process.env.SMTP_USER;

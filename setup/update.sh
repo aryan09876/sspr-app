@@ -89,18 +89,21 @@ if [ "$BEFORE" = "$AFTER" ] && [ "$BUILD_MISSING" = "false" ] && [ "${1:-}" != "
     git stash pop --quiet 2>/dev/null || true
   fi
 
-  # Vérifier quand même que la base de données existe (installation incomplète possible)
+  # Toujours vérifier les migrations (idempotent — ne fait rien si déjà à jour)
+  # Couvre le cas où dev.db existe mais est vide/sans tables (installation incomplète)
   DB_PATH="$PROJECT_DIR/prisma/dev.db"
-  if [ ! -f "$DB_PATH" ]; then
-    warn "Base de données absente — initialisation en cours..."
-    MIGRATE_OUTPUT=$(npx prisma migrate deploy 2>&1)
-    MIGRATE_STATUS=$?
-    echo "$MIGRATE_OUTPUT" | grep -E "(Applied|already|Migration|Error|error)" || true
-    if [ $MIGRATE_STATUS -ne 0 ]; then
-      fail "Échec de la migration Prisma. Détail :\n$MIGRATE_OUTPUT"
-    fi
-    ok "Base de données initialisée : $DB_PATH"
+  info "Vérification des migrations Prisma..."
+  MIGRATE_OUTPUT=$(npx prisma migrate deploy 2>&1)
+  MIGRATE_STATUS=$?
+  echo "$MIGRATE_OUTPUT" | grep -E "(Applied|already|Migration|Error|error)" || true
+  if [ $MIGRATE_STATUS -ne 0 ]; then
+    fail "Échec de la migration Prisma. Détail :\n$MIGRATE_OUTPUT"
+  fi
+  ok "Base de données vérifiée : $DB_PATH"
+  # Redémarrer si une migration a été appliquée
+  if echo "$MIGRATE_OUTPUT" | grep -q "Applied\|Applying"; then
     pm2 restart sspr-app --update-env 2>/dev/null || true
+    ok "Application redémarrée (migration appliquée)"
   fi
 
   echo ""
