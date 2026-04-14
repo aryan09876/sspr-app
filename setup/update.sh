@@ -126,18 +126,21 @@ fi
 # =============================================================================
 section "Base de données"
 
-if git diff --name-only "$BEFORE".."$AFTER" | grep -q "prisma/migrations"; then
-  info "Nouvelles migrations détectées..."
-  MIGRATE_OUTPUT=$(npx prisma migrate deploy 2>&1)
-  MIGRATE_STATUS=$?
-  echo "$MIGRATE_OUTPUT" | grep -E "(Applied|already|Migration|Error|error)" || true
-  if [ $MIGRATE_STATUS -ne 0 ]; then
-    fail "Échec de la migration Prisma. Détail :\n$MIGRATE_OUTPUT"
-  fi
-  ok "Migrations appliquées"
-else
-  ok "Schéma de base de données inchangé"
+DB_PATH="$PROJECT_DIR/prisma/dev.db"
+
+# Toujours appliquer les migrations : couvre les nouvelles migrations ET
+# le cas où la base n'a jamais été initialisée (installation incomplète)
+info "Vérification et application des migrations Prisma..."
+MIGRATE_OUTPUT=$(npx prisma migrate deploy 2>&1)
+MIGRATE_STATUS=$?
+echo "$MIGRATE_OUTPUT" | grep -E "(Applied|already|Migration|Error|error)" || true
+if [ $MIGRATE_STATUS -ne 0 ]; then
+  fail "Échec de la migration Prisma. Détail :\n$MIGRATE_OUTPUT"
 fi
+if [ ! -f "$DB_PATH" ]; then
+  fail "La base de données est introuvable ($DB_PATH). Vérifiez DATABASE_URL dans .env.local."
+fi
+ok "Base de données à jour : $DB_PATH"
 
 # =============================================================================
 # Recompiler l'application
